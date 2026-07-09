@@ -30,7 +30,7 @@ def check_config():
     # Check required variables
     required_vars = ["TENANT_ID", "CLIENT_ID", "CLIENT_SECRET", "SITE_URL"]
 
-    optional_vars = ["USERNAME", "PASSWORD", "DEBUG"]
+    optional_vars = ["DEBUG"]
 
     missing_vars = []
     for var in required_vars:
@@ -55,10 +55,6 @@ def check_config():
         print(
             f"⚠️ WARNING: Missing optional environment variables: {', '.join(missing_optional)}"
         )
-        if "USERNAME" in missing_optional or "PASSWORD" in missing_optional:
-            print(
-                "   Note: USERNAME and PASSWORD are needed for user-delegated authentication"
-            )
 
     # Check site URL format
     site_url = os.getenv("SITE_URL")
@@ -109,9 +105,6 @@ def check_config():
     print(f"🔹 Client Secret: {'*' * 10}")
     print(f"🔹 Site URL: {site_url}")
     print(f"🔹 Debug Mode: {os.getenv('DEBUG', 'False')}")
-
-    if os.getenv("USERNAME"):
-        print(f"🔹 Username: {os.getenv('USERNAME')}")
 
     print("\n✅ Configuration check completed")
     return True

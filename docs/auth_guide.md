@@ -51,8 +51,6 @@ TENANT_ID=your_tenant_id_from_step_2
 CLIENT_ID=your_client_id_from_step_2
 CLIENT_SECRET=your_client_secret_from_step_3
 SITE_URL=https://your-tenant.sharepoint.com/sites/your-site
-USERNAME=your.email@example.com  # Only needed for user-delegated auth
-PASSWORD=your_password           # Only needed for user-delegated auth
 ```
 
 ## Alternative Authentication Methods

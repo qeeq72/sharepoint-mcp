@@ -21,8 +21,6 @@ SHAREPOINT_CONFIG = {
     "search_sites": [
         s.strip() for s in os.getenv("SEARCH_SITES", "").split(",") if s.strip()
     ],
-    "username": os.getenv("USERNAME", ""),
-    "password": os.getenv("PASSWORD", ""),
     "scope": [
         "https://graph.microsoft.com/.default",
         # The application must have these permissions:
