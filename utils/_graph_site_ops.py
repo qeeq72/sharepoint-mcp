@@ -43,7 +43,7 @@ class _GraphSiteOpsMixin:
         """
         endpoint = f"sites?search={quote(query or '*')}"
         logger.info(f"Listing tenant sites with query: {query or '*'}")
-        return await self.get(endpoint)
+        return await self.get_paged(endpoint)
 
     async def search_site(
         self,

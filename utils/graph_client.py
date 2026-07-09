@@ -25,8 +25,15 @@ class GraphClient(
 ):
     """Client for interacting with Microsoft Graph API."""
 
-    def __init__(self, context: SharePointContext):
-        """Initialize Graph client with SharePoint context."""
+    def __init__(self, context: SharePointContext, http_client=None):
+        """Initialize Graph client with SharePoint context.
+
+        Args:
+            context: Authenticated SharePoint context
+            http_client: Optional httpx.AsyncClient override (used in tests);
+                defaults to the shared module-level client
+        """
         self.context = context
         self.base_url = context.graph_url
+        self._http = http_client
         logger.debug(f"GraphClient initialized with base URL: {self.base_url}")
