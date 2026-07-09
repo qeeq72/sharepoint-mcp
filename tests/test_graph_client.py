@@ -349,6 +349,85 @@ async def test_get_list_items_with_filter(mock_get, graph_client):
     assert "$filter=" in call_url
 
 
+@patch("requests.get")
+async def test_list_sites(mock_get, graph_client):
+    """Test list_sites queries the tenant-wide sites endpoint."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "value": [
+            {
+                "id": "contoso.sharepoint.com,guid1,guid2",
+                "name": "hr",
+                "displayName": "HR",
+                "webUrl": "https://contoso.sharepoint.com/sites/hr",
+            }
+        ]
+    }
+    mock_get.return_value = mock_response
+
+    result = await graph_client.list_sites()
+    assert result["value"][0]["name"] == "hr"
+    call_url = mock_get.call_args[0][0]
+    assert "sites?search=%2A" in call_url
+
+    # Name filter is passed through
+    mock_get.reset_mock()
+    mock_get.return_value = mock_response
+    await graph_client.list_sites("hr team")
+    call_url = mock_get.call_args[0][0]
+    assert "sites?search=hr%20team" in call_url
+
+
+@patch("requests.post")
+async def test_search_site(mock_post, graph_client):
+    """Test search_site sends the site-scoped search request."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "value": [
+            {
+                "hitsContainers": [
+                    {
+                        "hits": [
+                            {
+                                "summary": "match",
+                                "resource": {"name": "doc.docx", "webUrl": "url"},
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    mock_post.return_value = mock_response
+
+    result = await graph_client.search_site("site1", "report")
+    hits = result["value"][0]["hitsContainers"][0]["hits"]
+    assert hits[0]["resource"]["name"] == "doc.docx"
+    call_url = mock_post.call_args[0][0]
+    assert "sites/site1/search" in call_url
+    sent_body = mock_post.call_args[1]["json"]
+    assert sent_body["requests"][0]["query"]["queryString"] == "report"
+    assert sent_body["requests"][0]["entityTypes"] == [
+        "driveItem",
+        "listItem",
+        "list",
+    ]
+
+
+@patch("requests.post")
+async def test_search_site_empty_value(mock_post, graph_client):
+    """Test search_site tolerates an empty value array (no results)."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"value": []}
+    mock_post.return_value = mock_response
+
+    result = await graph_client.search_site("site1", "nothing")
+    assert result["value"] == []
+
+
 @patch("requests.post")
 async def test_create_site(mock_post, graph_client):
     """Test create_site sends POST with correct display name and alias."""

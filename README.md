@@ -161,7 +161,8 @@ The following MCP tools are exposed to the LLM:
 | `get_document_content` | Read and parse DOCX, PDF, XLSX, CSV, or TXT files |
 | `get_document_by_path` | Retrieve document content by file path |
 | `get_item_metadata` | Get metadata for a file or folder |
-| `search_sharepoint` | Full-text search across all content in the site |
+| `list_sites` | List sites in the tenant, optionally filtered by name |
+| `search_sharepoint` | Full-text search across one or more sites (see below) |
 | `upload_document` | Upload a file to a document library |
 | `create_list_item` | Create a new item in a SharePoint list |
 | `update_list_item` | Update an existing item in a SharePoint list |
@@ -170,6 +171,21 @@ The following MCP tools are exposed to the LLM:
 | `create_modern_page` | Publish a modern SharePoint page |
 | `create_news_post` | Publish a news article to the site |
 | `create_sharepoint_site` | Provision a new SharePoint team site |
+
+### Multi-site search
+
+`search_sharepoint` accepts an optional `sites` argument (a list of site URLs or
+site IDs) and searches each site in a single call, merging results tagged with
+their source site. The search scope is resolved in priority order:
+
+1. The `sites` argument, when provided.
+2. The `SEARCH_SITES` environment variable (comma-separated site URLs or IDs), when set.
+3. All sites in the tenant, capped at `max_sites` (default 20; the response
+   sets `truncated: true` when the cap applies).
+
+A failure on one site (e.g. no access) does not fail the whole search — it is
+reported in the `errors` field of the response. Use `list_sites` to discover
+available sites and their IDs.
 
 For detailed usage examples and example prompts, see [docs/usage.md](docs/usage.md).
 

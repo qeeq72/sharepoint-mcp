@@ -1,8 +1,10 @@
 """SharePoint read-only tools."""
 
+import asyncio
 import base64
 import json
 import logging
+from typing import List, Optional
 
 from mcp.server.fastmcp import FastMCP, Context
 
@@ -90,11 +92,67 @@ def register_read_tools(mcp: FastMCP):
             raise
 
     @mcp.tool()
-    async def search_sharepoint(ctx: Context, query: str) -> str:
-        """Search content in the SharePoint site.
+    async def list_sites(ctx: Context, query: str = "") -> str:
+        """List SharePoint sites in the tenant.
+
+        Args:
+            query: Optional name filter; empty returns all sites
+        """
+        logger.info(f"Tool called: list_sites with query: {query}")
+        try:
+            sp_ctx = ctx.request_context.lifespan_context
+            _check_auth(sp_ctx)
+            await refresh_token_if_needed(sp_ctx)
+            graph_client = GraphClient(sp_ctx)
+
+            result = await graph_client.list_sites(query or "*")
+            formatted_sites = [
+                {
+                    "id": site.get("id", "Unknown"),
+                    "name": site.get("name", "Unknown"),
+                    "display_name": site.get("displayName", "Unknown"),
+                    "web_url": site.get("webUrl", "Unknown"),
+                }
+                for site in result.get("value", [])
+            ]
+            logger.info(f"Successfully retrieved {len(formatted_sites)} sites")
+            return json.dumps(formatted_sites, indent=2)
+        except Exception as e:
+            logger.error(f"Error in list_sites: {str(e)}")
+            raise
+
+    async def _resolve_site(graph_client: GraphClient, site: str) -> dict:
+        """Resolve a site URL or site ID to {"id", "web_url"}."""
+        if "sharepoint.com" in site and ("://" in site or "/" in site):
+            site_parts = site.replace("https://", "").replace("http://", "").split("/")
+            domain = site_parts[0]
+            site_name = site_parts[2] if len(site_parts) > 2 else "root"
+            site_info = await graph_client.get_site_info(domain, site_name)
+            site_id = site_info.get("id")
+            if not site_id:
+                raise Exception(f"Could not resolve site ID for: {site}")
+            return {"id": site_id, "web_url": site_info.get("webUrl", site)}
+        return {"id": site, "web_url": site}
+
+    @mcp.tool()
+    async def search_sharepoint(
+        ctx: Context,
+        query: str,
+        sites: Optional[List[str]] = None,
+        max_sites: int = 20,
+    ) -> str:
+        """Search content across one or more SharePoint sites.
+
+        Search scope is resolved in priority order:
+        1. The `sites` argument (site URLs or site IDs).
+        2. The SEARCH_SITES environment variable (comma-separated), if set.
+        3. All sites in the tenant, capped at `max_sites`.
 
         Args:
             query: Search query string
+            sites: Optional list of site URLs or site IDs to search
+            max_sites: Maximum number of sites searched when scope is the
+                whole tenant (default 20)
         """
         logger.info(f"Tool called: search_sharepoint with query: {query}")
         try:
@@ -103,45 +161,66 @@ def register_read_tools(mcp: FastMCP):
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_parts = (
-                SHAREPOINT_CONFIG["site_url"].replace("https://", "").split("/")
-            )
-            domain = site_parts[0]
-            site_name = site_parts[2] if len(site_parts) > 2 else "root"
-            logger.info(f"Searching for '{query}' in site: {site_name}")
-
-            site_info = await graph_client.get_site_info(domain, site_name)
-            site_id = site_info.get("id")
-            if not site_id:
-                raise Exception("Error: Could not retrieve site ID")
-
-            search_url = f"sites/{site_id}/search"
-            search_data = {
-                "requests": [
-                    {
-                        "entityTypes": ["driveItem", "listItem", "list"],
-                        "query": {"queryString": query},
-                    }
+            truncated = False
+            if sites:
+                targets = [await _resolve_site(graph_client, s) for s in sites]
+            elif SHAREPOINT_CONFIG["search_sites"]:
+                targets = [
+                    await _resolve_site(graph_client, s)
+                    for s in SHAREPOINT_CONFIG["search_sites"]
                 ]
-            }
-            logger.debug(f"Search request: {search_data}")
-            search_results = await graph_client.post(search_url, search_data)
+            else:
+                all_sites = (await graph_client.list_sites()).get("value", [])
+                if len(all_sites) > max_sites:
+                    truncated = True
+                    all_sites = all_sites[:max_sites]
+                targets = [
+                    {"id": s["id"], "web_url": s.get("webUrl", "Unknown")}
+                    for s in all_sites
+                    if s.get("id")
+                ]
+            logger.info(f"Searching for '{query}' across {len(targets)} site(s)")
+
+            search_outcomes = await asyncio.gather(
+                *[graph_client.search_site(t["id"], query) for t in targets],
+                return_exceptions=True,
+            )
 
             formatted_results = []
-            for result in search_results.get("value", [])[0].get("hitsContainers", []):
-                for hit in result.get("hits", []):
-                    formatted_results.append(
-                        {
-                            "title": hit.get("resource", {}).get("name", "Unknown"),
-                            "url": hit.get("resource", {}).get("webUrl", "Unknown"),
-                            "type": hit.get("resource", {}).get(
-                                "@odata.type", "Unknown"
-                            ),
-                            "summary": hit.get("summary", "No summary available"),
-                        }
-                    )
-            logger.info(f"Search returned {len(formatted_results)} results")
-            return json.dumps(formatted_results, indent=2)
+            errors = []
+            for target, outcome in zip(targets, search_outcomes):
+                if isinstance(outcome, BaseException):
+                    logger.error(f"Search failed for {target['web_url']}: {outcome}")
+                    errors.append({"site": target["web_url"], "error": str(outcome)})
+                    continue
+                for response in outcome.get("value", []):
+                    for container in response.get("hitsContainers", []):
+                        for hit in container.get("hits", []):
+                            resource = hit.get("resource", {})
+                            formatted_results.append(
+                                {
+                                    "title": resource.get("name", "Unknown"),
+                                    "url": resource.get("webUrl", "Unknown"),
+                                    "type": resource.get("@odata.type", "Unknown"),
+                                    "summary": hit.get(
+                                        "summary", "No summary available"
+                                    ),
+                                    "site": target["web_url"],
+                                }
+                            )
+            logger.info(
+                f"Search returned {len(formatted_results)} results "
+                f"from {len(targets)} site(s), {len(errors)} error(s)"
+            )
+            return json.dumps(
+                {
+                    "results": formatted_results,
+                    "errors": errors,
+                    "sites_searched": len(targets),
+                    "truncated": truncated,
+                },
+                indent=2,
+            )
         except Exception as e:
             logger.error(f"Error in search_sharepoint: {str(e)}")
             raise

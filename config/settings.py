@@ -16,6 +16,11 @@ SHAREPOINT_CONFIG = {
     "client_id": os.getenv("CLIENT_ID", ""),
     "client_secret": os.getenv("CLIENT_SECRET", ""),
     "site_url": os.getenv("SITE_URL", ""),
+    # Optional default scope for multi-site search: comma-separated site URLs
+    # or site IDs. Empty means "all sites in the tenant" (capped by max_sites).
+    "search_sites": [
+        s.strip() for s in os.getenv("SEARCH_SITES", "").split(",") if s.strip()
+    ],
     "username": os.getenv("USERNAME", ""),
     "password": os.getenv("PASSWORD", ""),
     "scope": [
