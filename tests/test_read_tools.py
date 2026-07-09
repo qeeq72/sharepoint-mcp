@@ -38,13 +38,14 @@ DOCS_SITE = {
 }
 
 
-def search_hit(name):
+def search_hit(name, more_results=False):
     """Build a Graph search response with a single driveItem hit."""
     return {
         "value": [
             {
                 "hitsContainers": [
                     {
+                        "moreResultsAvailable": more_results,
                         "hits": [
                             {
                                 "summary": f"summary of {name}",
@@ -54,7 +55,7 @@ def search_hit(name):
                                     "@odata.type": "#microsoft.graph.driveItem",
                                 },
                             }
-                        ]
+                        ],
                     }
                 ]
             }
@@ -245,6 +246,32 @@ async def test_search_tolerates_per_site_errors(tool_fns, fake_ctx, graph):
     assert len(result["errors"]) == 1
     assert result["errors"][0]["site"] == LEGAL_SITE["id"]
     assert "403" in result["errors"][0]["error"]
+
+
+async def test_search_reports_more_results(tool_fns, fake_ctx, graph):
+    """Test that sites with more matches than size are flagged in the response."""
+    graph["search"] = {
+        HR_SITE["id"]: search_hit("a.docx", more_results=True),
+        LEGAL_SITE["id"]: search_hit("b.docx"),
+    }
+
+    result = json.loads(
+        await tool_fns["search_sharepoint"](
+            fake_ctx, query="q", sites=[HR_SITE["id"], LEGAL_SITE["id"]]
+        )
+    )
+    assert result["more_results_available_on"] == [HR_SITE["id"]]
+
+
+async def test_search_passes_size(tool_fns, fake_ctx, graph):
+    """Test that the size argument reaches the Graph search request body."""
+    graph["search"] = {HR_SITE["id"]: search_hit("a.docx")}
+
+    await tool_fns["search_sharepoint"](
+        fake_ctx, query="q", sites=[HR_SITE["id"]], size=5
+    )
+    sent_body = json.loads(graph["requests"][0].content)
+    assert sent_body["requests"][0]["size"] == 5
 
 
 async def test_search_handles_empty_results(tool_fns, fake_ctx, graph):

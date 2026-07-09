@@ -50,14 +50,23 @@ class _GraphSiteOpsMixin:
         site_id: str,
         query: str,
         entity_types: Optional[List[str]] = None,
+        size: int = 25,
     ) -> Dict[str, Any]:
-        """Search content within a single site via POST /sites/{id}/search."""
+        """Search content within a single site via POST /sites/{id}/search.
+
+        Args:
+            site_id: ID of the site to search
+            query: Search query string
+            entity_types: Entity types to search (default: driveItem/listItem/list)
+            size: Maximum number of hits to return (Graph default is 25)
+        """
         endpoint = f"sites/{site_id}/search"
         data = {
             "requests": [
                 {
                     "entityTypes": entity_types or ["driveItem", "listItem", "list"],
                     "query": {"queryString": query},
+                    "size": size,
                 }
             ]
         }

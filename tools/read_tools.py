@@ -140,6 +140,7 @@ def register_read_tools(mcp: FastMCP):
         query: str,
         sites: Optional[List[str]] = None,
         max_sites: int = 20,
+        size: int = 25,
     ) -> str:
         """Search content across one or more SharePoint sites.
 
@@ -148,11 +149,16 @@ def register_read_tools(mcp: FastMCP):
         2. The SEARCH_SITES environment variable (comma-separated), if set.
         3. All sites in the tenant, capped at `max_sites`.
 
+        Sites that have more matches than `size` are listed in the
+        `more_results_available_on` field of the response — narrow the
+        query or raise `size` to see more.
+
         Args:
             query: Search query string
             sites: Optional list of site URLs or site IDs to search
             max_sites: Maximum number of sites searched when scope is the
                 whole tenant (default 20)
+            size: Maximum number of results per site (default 25)
         """
         logger.info(f"Tool called: search_sharepoint with query: {query}")
         try:
@@ -182,12 +188,13 @@ def register_read_tools(mcp: FastMCP):
             logger.info(f"Searching for '{query}' across {len(targets)} site(s)")
 
             search_outcomes = await asyncio.gather(
-                *[graph_client.search_site(t["id"], query) for t in targets],
+                *[graph_client.search_site(t["id"], query, size=size) for t in targets],
                 return_exceptions=True,
             )
 
             formatted_results = []
             errors = []
+            more_results_available_on = []
             for target, outcome in zip(targets, search_outcomes):
                 if isinstance(outcome, BaseException):
                     logger.error(f"Search failed for {target['web_url']}: {outcome}")
@@ -195,6 +202,8 @@ def register_read_tools(mcp: FastMCP):
                     continue
                 for response in outcome.get("value", []):
                     for container in response.get("hitsContainers", []):
+                        if container.get("moreResultsAvailable"):
+                            more_results_available_on.append(target["web_url"])
                         for hit in container.get("hits", []):
                             resource = hit.get("resource", {})
                             formatted_results.append(
@@ -218,6 +227,7 @@ def register_read_tools(mcp: FastMCP):
                     "errors": errors,
                     "sites_searched": len(targets),
                     "truncated": truncated,
+                    "more_results_available_on": sorted(set(more_results_available_on)),
                 },
                 indent=2,
             )

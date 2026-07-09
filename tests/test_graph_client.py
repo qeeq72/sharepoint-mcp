@@ -561,11 +561,20 @@ async def test_search_site(mock_context):
     assert "sites/site1/search" in str(calls[0].url)
     sent_body = json.loads(calls[0].content)
     assert sent_body["requests"][0]["query"]["queryString"] == "report"
+    assert sent_body["requests"][0]["size"] == 25
     assert sent_body["requests"][0]["entityTypes"] == [
         "driveItem",
         "listItem",
         "list",
     ]
+
+
+async def test_search_site_custom_size(mock_context):
+    """Test search_site passes a custom result size through."""
+    client, calls = make_client(mock_context, [httpx.Response(200, json={"value": []})])
+    await client.search_site("site1", "report", size=5)
+    sent_body = json.loads(calls[0].content)
+    assert sent_body["requests"][0]["size"] == 5
 
 
 async def test_search_site_empty_value(mock_context):

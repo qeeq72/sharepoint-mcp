@@ -13,3 +13,4 @@
 
 All acceptance criteria in `requirements.md` met; all checks green.
 - [x] Tests for the MCP tools themselves (tests/test_read_tools.py): scope resolution, truncation, per-site error tolerance
+- [x] Search result size + more_results_available_on flag (size param, per-site moreResultsAvailable)

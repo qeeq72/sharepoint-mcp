@@ -187,6 +187,10 @@ A failure on one site (e.g. no access) does not fail the whole search — it is
 reported in the `errors` field of the response. Use `list_sites` to discover
 available sites and their IDs.
 
+Each site returns at most `size` results (default 25). Sites that matched more
+than that are listed in the `more_results_available_on` response field —
+narrow the query or raise `size` to see more.
+
 For detailed usage examples and example prompts, see [docs/usage.md](docs/usage.md).
 
 ---
