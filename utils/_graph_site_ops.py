@@ -1,7 +1,8 @@
 """Site and document library operations mixin for GraphClient."""
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+from urllib.parse import quote
 
 logger = logging.getLogger("graph_client")
 
@@ -33,6 +34,44 @@ class _GraphSiteOpsMixin:
         endpoint = f"sites/{site_id}/drives"
         logger.info(f"Listing document libraries for site ID: {site_id}")
         return await self.get(endpoint)
+
+    async def list_sites(self, query: str = "*") -> Dict[str, Any]:
+        """List sites in the tenant, optionally filtered by name.
+
+        Uses GET /sites?search={query}; "*" returns all sites the
+        application has access to.
+        """
+        endpoint = f"sites?search={quote(query or '*')}"
+        logger.info(f"Listing tenant sites with query: {query or '*'}")
+        return await self.get_paged(endpoint)
+
+    async def search_site(
+        self,
+        site_id: str,
+        query: str,
+        entity_types: Optional[List[str]] = None,
+        size: int = 25,
+    ) -> Dict[str, Any]:
+        """Search content within a single site via POST /sites/{id}/search.
+
+        Args:
+            site_id: ID of the site to search
+            query: Search query string
+            entity_types: Entity types to search (default: driveItem/listItem/list)
+            size: Maximum number of hits to return (Graph default is 25)
+        """
+        endpoint = f"sites/{site_id}/search"
+        data = {
+            "requests": [
+                {
+                    "entityTypes": entity_types or ["driveItem", "listItem", "list"],
+                    "query": {"queryString": query},
+                    "size": size,
+                }
+            ]
+        }
+        logger.info(f"Searching site {site_id} for: {query}")
+        return await self.post(endpoint, data)
 
     async def create_site(
         self, display_name: str, alias: str, description: str = ""

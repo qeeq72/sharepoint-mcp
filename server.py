@@ -12,6 +12,7 @@ from mcp.server.fastmcp import FastMCP
 
 from auth.sharepoint_auth import SharePointContext, get_auth_context
 from config.settings import APP_NAME, DEBUG
+from utils._graph_http import close_http_client
 from tools.site_tools import register_site_tools
 
 # Set logging level
@@ -50,6 +51,7 @@ async def sharepoint_lifespan(server: FastMCP) -> AsyncIterator[SharePointContex
         yield error_context
 
     finally:
+        await close_http_client()
         logger.info("Ending SharePoint connection...")
 
 

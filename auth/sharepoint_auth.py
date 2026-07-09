@@ -67,7 +67,7 @@ class SharePointContext:
                 site_url = f"{self.graph_url}/sites/{domain}:/sites/{site_name}"
             logger.debug(f"Testing connection to: {site_url}")
 
-            response = requests.get(site_url, headers=self.headers)
+            response = requests.get(site_url, headers=self.headers, timeout=15)
 
             if response.status_code != 200:
                 logger.error(
@@ -99,7 +99,7 @@ class SharePointContext:
                 site_url = f"{self.graph_url}/sites/{domain}:"
             else:
                 site_url = f"{self.graph_url}/sites/{domain}:/sites/{site_name}"
-            response = requests.get(site_url, headers=self.headers)
+            response = requests.get(site_url, headers=self.headers, timeout=15)
 
             if response.status_code != 200:
                 logger.error(
@@ -115,7 +115,7 @@ class SharePointContext:
             # Try to create a simple folder in a document library
             # First, get document libraries
             drives_url = f"{self.graph_url}/sites/{site_id}/drives"
-            response = requests.get(drives_url, headers=self.headers)
+            response = requests.get(drives_url, headers=self.headers, timeout=15)
 
             if response.status_code != 200:
                 logger.error(
@@ -141,7 +141,9 @@ class SharePointContext:
                 "@microsoft.graph.conflictBehavior": "rename",
             }
 
-            response = requests.post(folder_url, headers=self.headers, json=folder_data)
+            response = requests.post(
+                folder_url, headers=self.headers, json=folder_data, timeout=15
+            )
 
             if response.status_code not in (200, 201):
                 logger.error(
@@ -159,7 +161,9 @@ class SharePointContext:
                 f"{self.graph_url}/sites/{site_id}/drives/{drive_id}/items/{folder_id}"
             )
 
-            delete_response = requests.delete(delete_url, headers=self.headers)
+            delete_response = requests.delete(
+                delete_url, headers=self.headers, timeout=15
+            )
             if delete_response.status_code not in (200, 204):
                 logger.warning(
                     f"Could not delete test folder: {delete_response.status_code}"

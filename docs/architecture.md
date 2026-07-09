@@ -61,8 +61,6 @@ Defined in `.env` (see `.env.example`):
 | `MCP_TRANSPORT` | No | Transport protocol: `stdio` / `sse` / `streamable-http` (default: `stdio`) |
 | `MCP_HOST` | No | Bind host for HTTP transports (default: `0.0.0.0`) |
 | `MCP_PORT` | No | Bind port for HTTP transports (default: `8000`) |
-| `USERNAME` | No | User email (for delegated auth, not used in current implementation) |
-| `PASSWORD` | No | User password (for delegated auth, not used in current implementation) |
 
 ---
 

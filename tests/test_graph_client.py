@@ -1,3 +1,6 @@
+import json
+
+import httpx
 import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta
@@ -20,95 +23,228 @@ def graph_client(mock_context):
     return GraphClient(mock_context)
 
 
-@patch("requests.get")
-async def test_get(mock_get, graph_client):
-    """Test the GET method of GraphClient."""
-    # Setup mock response
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"value": "test_data"}
-    mock_get.return_value = mock_response
+def make_client(mock_context, responses):
+    """Create a GraphClient backed by a MockTransport serving `responses` in order.
 
-    # Test successful request
-    result = await graph_client.get("endpoint/test")
-    assert result == {"value": "test_data"}
-    mock_get.assert_called_once_with(
-        "https://graph.microsoft.com/v1.0/endpoint/test",
-        headers=graph_client.context.headers,
+    Returns (client, calls) where calls collects each httpx.Request made.
+    """
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return responses.pop(0)
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return GraphClient(mock_context, http_client=http), calls
+
+
+@pytest.fixture
+def no_sleep(monkeypatch):
+    """Replace the retry sleep with a recording no-op; returns recorded delays."""
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr("utils._graph_http.asyncio.sleep", fake_sleep)
+    return delays
+
+
+async def test_get(mock_context):
+    """Test the GET method of GraphClient."""
+    client, calls = make_client(
+        mock_context, [httpx.Response(200, json={"value": "test_data"})]
     )
+    result = await client.get("endpoint/test")
+    assert result == {"value": "test_data"}
+    assert str(calls[0].url) == "https://graph.microsoft.com/v1.0/endpoint/test"
+    assert calls[0].headers["Authorization"] == "Bearer test_token"
 
     # Test error response
-    mock_get.reset_mock()
-    mock_response.status_code = 404
-    mock_response.text = "Not Found"
-
+    client, calls = make_client(mock_context, [httpx.Response(404, text="Not Found")])
     with pytest.raises(Exception) as excinfo:
-        await graph_client.get("endpoint/error")
+        await client.get("endpoint/error")
     assert "Graph API error: 404" in str(excinfo.value)
 
 
-@patch("requests.post")
-async def test_post(mock_post, graph_client):
+async def test_get_absolute_url(mock_context):
+    """Test that get() accepts absolute URLs (used for @odata.nextLink)."""
+    client, calls = make_client(mock_context, [httpx.Response(200, json={"value": []})])
+    await client.get("https://graph.microsoft.com/v1.0/sites?$skiptoken=abc")
+    assert str(calls[0].url) == "https://graph.microsoft.com/v1.0/sites?$skiptoken=abc"
+
+
+async def test_post(mock_context):
     """Test the POST method of GraphClient."""
-    # Setup mock response
-    mock_response = MagicMock()
-    mock_response.status_code = 201
-    mock_response.json.return_value = {"id": "new_item_id"}
-    mock_post.return_value = mock_response
-
-    # Test data
-    test_data = {"name": "test_item"}
-
-    # Test successful request
-    result = await graph_client.post("endpoint/create", test_data)
-    assert result == {"id": "new_item_id"}
-    mock_post.assert_called_once_with(
-        "https://graph.microsoft.com/v1.0/endpoint/create",
-        headers=graph_client.context.headers,
-        json=test_data,
+    client, calls = make_client(
+        mock_context, [httpx.Response(201, json={"id": "new_item_id"})]
     )
+    test_data = {"name": "test_item"}
+    result = await client.post("endpoint/create", test_data)
+    assert result == {"id": "new_item_id"}
+    assert str(calls[0].url) == "https://graph.microsoft.com/v1.0/endpoint/create"
+    assert json.loads(calls[0].content) == test_data
 
     # Test error response
-    mock_post.reset_mock()
-    mock_response.status_code = 400
-    mock_response.text = "Bad Request"
-
+    client, calls = make_client(mock_context, [httpx.Response(400, text="Bad Request")])
     with pytest.raises(Exception) as excinfo:
-        await graph_client.post("endpoint/error", test_data)
+        await client.post("endpoint/error", test_data)
     assert "Graph API error: 400" in str(excinfo.value)
 
 
-@patch("requests.get")
-async def test_list_folder_contents_root(mock_get, graph_client):
-    """Test list_folder_contents with an empty path (root listing)."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "value": [{"name": "General", "folder": {}, "id": "abc123"}]
-    }
-    mock_get.return_value = mock_response
+# ---------------------------------------------------------------------------
+# Retry behavior
+# ---------------------------------------------------------------------------
 
-    result = await graph_client.list_folder_contents("site1", "drive1", "")
+
+async def test_retry_on_429_honors_retry_after(mock_context, no_sleep):
+    """Test that a 429 is retried after the Retry-After delay."""
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(429, headers={"Retry-After": "2"}, text="throttled"),
+            httpx.Response(200, json={"value": "ok"}),
+        ],
+    )
+    result = await client.get("endpoint/throttled")
+    assert result == {"value": "ok"}
+    assert len(calls) == 2
+    assert no_sleep == [2.0]
+
+
+async def test_retry_exhaustion_raises(mock_context, no_sleep):
+    """Test that retries are capped and the final 429 raises."""
+    client, calls = make_client(
+        mock_context, [httpx.Response(429, text="throttled")] * 4
+    )
+    with pytest.raises(Exception) as excinfo:
+        await client.get("endpoint/throttled")
+    assert "Graph API error: 429" in str(excinfo.value)
+    assert len(calls) == 4  # initial attempt + 3 retries
+
+
+async def test_retry_after_is_capped(mock_context, no_sleep):
+    """Test that an excessive Retry-After value is capped at 60s."""
+    client, _ = make_client(
+        mock_context,
+        [
+            httpx.Response(429, headers={"Retry-After": "300"}, text="throttled"),
+            httpx.Response(200, json={}),
+        ],
+    )
+    await client.get("endpoint/throttled")
+    assert no_sleep == [60.0]
+
+
+async def test_invalid_retry_after_falls_back_to_backoff(mock_context, no_sleep):
+    """Test exponential backoff when Retry-After is unparseable."""
+    client, _ = make_client(
+        mock_context,
+        [
+            httpx.Response(429, headers={"Retry-After": "soon"}, text="x"),
+            httpx.Response(429, text="x"),
+            httpx.Response(200, json={}),
+        ],
+    )
+    await client.get("endpoint/throttled")
+    assert no_sleep == [1.0, 2.0]
+
+
+async def test_get_retries_on_503(mock_context, no_sleep):
+    """Test that GET is retried on 503."""
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(503, text="unavailable"),
+            httpx.Response(200, json={"value": "ok"}),
+        ],
+    )
+    result = await client.get("endpoint/flaky")
+    assert result == {"value": "ok"}
+    assert len(calls) == 2
+
+
+async def test_post_not_retried_on_503(mock_context, no_sleep):
+    """Test that non-idempotent POST is NOT retried on 5xx."""
+    client, calls = make_client(mock_context, [httpx.Response(503, text="unavailable")])
+    with pytest.raises(Exception) as excinfo:
+        await client.post("endpoint/create", {"name": "x"})
+    assert "Graph API error: 503" in str(excinfo.value)
+    assert len(calls) == 1
+    assert no_sleep == []
+
+
+# ---------------------------------------------------------------------------
+# Pagination
+# ---------------------------------------------------------------------------
+
+
+async def test_get_paged_merges_pages(mock_context):
+    """Test that get_paged follows @odata.nextLink and merges values."""
+    next_url = "https://graph.microsoft.com/v1.0/sites?$skiptoken=page2"
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={"value": [{"id": "a"}], "@odata.nextLink": next_url},
+            ),
+            httpx.Response(200, json={"value": [{"id": "b"}]}),
+        ],
+    )
+    result = await client.get_paged("sites?search=%2A")
+    assert [item["id"] for item in result["value"]] == ["a", "b"]
+    assert "@odata.nextLink" not in result
+    assert len(calls) == 2
+    assert str(calls[1].url) == next_url
+
+
+async def test_get_paged_respects_page_cap(mock_context):
+    """Test that get_paged stops at max_pages even if nextLink continues."""
+    endless = httpx.Response(
+        200,
+        json={
+            "value": [{"id": "x"}],
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/sites?$skiptoken=n",
+        },
+    )
+    client, calls = make_client(mock_context, [endless] * 10)
+    result = await client.get_paged("sites?search=%2A", max_pages=3)
+    assert len(result["value"]) == 3
+    assert len(calls) == 3
+
+
+async def test_list_folder_contents_root(mock_context):
+    """Test list_folder_contents with an empty path (root listing)."""
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200, json={"value": [{"name": "General", "folder": {}, "id": "abc123"}]}
+            )
+        ],
+    )
+    result = await client.list_folder_contents("site1", "drive1", "")
     assert result["value"][0]["name"] == "General"
-    call_url = mock_get.call_args[0][0]
+    call_url = str(calls[0].url)
     assert "root/children" in call_url
     assert "root:/" not in call_url
 
 
-@patch("requests.get")
-async def test_list_folder_contents_subfolder(mock_get, graph_client):
+async def test_list_folder_contents_subfolder(mock_context):
     """Test list_folder_contents with a subfolder path."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "value": [{"name": "report.docx", "file": {}, "id": "def456"}]
-    }
-    mock_get.return_value = mock_response
-
-    result = await graph_client.list_folder_contents("site1", "drive1", "General")
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={"value": [{"name": "report.docx", "file": {}, "id": "def456"}]},
+            )
+        ],
+    )
+    result = await client.list_folder_contents("site1", "drive1", "General")
     assert result["value"][0]["name"] == "report.docx"
-    call_url = mock_get.call_args[0][0]
-    assert "root:/General:/children" in call_url
+    assert "root:/General:/children" in str(calls[0].url)
 
 
 @patch("requests.get")
@@ -127,26 +263,28 @@ async def test_get_document_content_by_path(mock_get, graph_client):
     assert "root:/General/report.docx:/content" in call_url
 
 
-@patch("requests.get")
-async def test_get_item_metadata_by_path(mock_get, graph_client):
+async def test_get_item_metadata_by_path(mock_context):
     """Test get_item_metadata_by_path returns item metadata dict."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "id": "abc123",
-        "name": "report.docx",
-        "size": 4096,
-        "webUrl": "https://contoso.sharepoint.com/sites/test/report.docx",
-    }
-    mock_get.return_value = mock_response
-
-    result = await graph_client.get_item_metadata_by_path(
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={
+                    "id": "abc123",
+                    "name": "report.docx",
+                    "size": 4096,
+                    "webUrl": "https://contoso.sharepoint.com/sites/test/report.docx",
+                },
+            )
+        ],
+    )
+    result = await client.get_item_metadata_by_path(
         "site1", "drive1", "General/report.docx"
     )
     assert result["id"] == "abc123"
     assert result["name"] == "report.docx"
-    call_url = mock_get.call_args[0][0]
-    assert "root:/General/report.docx" in call_url
+    assert "root:/General/report.docx" in str(calls[0].url)
 
 
 # ---------------------------------------------------------------------------
@@ -239,127 +377,222 @@ async def test_upload_document_large(mock_post, mock_put, graph_client):
     assert f"/{len(large_content)}" in second_headers["Content-Range"]
 
 
-@patch("requests.post")
-async def test_create_list_item(mock_post, graph_client):
+async def test_create_list_item(mock_context):
     """Test create_list_item sends POST with correct endpoint and body."""
-    mock_response = MagicMock()
-    mock_response.status_code = 201
-    mock_response.json.return_value = {"id": "item1", "fields": {"Title": "Test"}}
-    mock_post.return_value = mock_response
-
-    result = await graph_client.create_list_item("site1", "list1", {"Title": "Test"})
+    client, calls = make_client(
+        mock_context,
+        [httpx.Response(201, json={"id": "item1", "fields": {"Title": "Test"}})],
+    )
+    result = await client.create_list_item("site1", "list1", {"Title": "Test"})
     assert result["id"] == "item1"
-    call_url = mock_post.call_args[0][0]
-    assert "sites/site1/lists/list1/items" in call_url
-    sent_body = mock_post.call_args[1]["json"]
-    assert sent_body == {"fields": {"Title": "Test"}}
+    assert "sites/site1/lists/list1/items" in str(calls[0].url)
+    assert json.loads(calls[0].content) == {"fields": {"Title": "Test"}}
 
 
-@patch("requests.patch")
-async def test_update_list_item(mock_patch, graph_client):
+async def test_update_list_item(mock_context):
     """Test update_list_item sends PATCH to the item fields endpoint."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"Title": "Updated"}
-    mock_patch.return_value = mock_response
-
-    result = await graph_client.update_list_item(
+    client, calls = make_client(
+        mock_context, [httpx.Response(200, json={"Title": "Updated"})]
+    )
+    result = await client.update_list_item(
         "site1", "list1", "item1", {"Title": "Updated"}
     )
     assert result["Title"] == "Updated"
-    call_url = mock_patch.call_args[0][0]
-    assert "sites/site1/lists/list1/items/item1/fields" in call_url
-    sent_body = mock_patch.call_args[1]["json"]
-    assert sent_body == {"Title": "Updated"}
+    assert "sites/site1/lists/list1/items/item1/fields" in str(calls[0].url)
+    assert json.loads(calls[0].content) == {"Title": "Updated"}
 
     # Error case
-    mock_patch.reset_mock()
-    mock_response.status_code = 403
-    mock_response.text = "Forbidden"
+    client, _ = make_client(mock_context, [httpx.Response(403, text="Forbidden")])
     with pytest.raises(Exception) as excinfo:
-        await graph_client.update_list_item("site1", "list1", "item1", {})
+        await client.update_list_item("site1", "list1", "item1", {})
     assert "Graph API error: 403" in str(excinfo.value)
 
 
-@patch("requests.get")
-async def test_get_lists(mock_get, graph_client):
+async def test_get_lists(mock_context):
     """Test get_lists returns all lists for a site."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "value": [
-            {
-                "id": "list1",
-                "displayName": "Tasks",
-                "list": {"template": "genericList"},
-            },
-            {
-                "id": "list2",
-                "displayName": "Documents",
-                "list": {"template": "documentLibrary"},
-            },
-        ]
-    }
-    mock_get.return_value = mock_response
-
-    result = await graph_client.get_lists("site1")
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "list1",
+                            "displayName": "Tasks",
+                            "list": {"template": "genericList"},
+                        },
+                        {
+                            "id": "list2",
+                            "displayName": "Documents",
+                            "list": {"template": "documentLibrary"},
+                        },
+                    ]
+                },
+            )
+        ],
+    )
+    result = await client.get_lists("site1")
     assert len(result["value"]) == 2
     assert result["value"][0]["displayName"] == "Tasks"
-    call_url = mock_get.call_args[0][0]
-    assert "sites/site1/lists" in call_url
+    assert "sites/site1/lists" in str(calls[0].url)
 
 
-@patch("requests.get")
-async def test_get_list_items(mock_get, graph_client):
+async def test_get_list_items(mock_context):
     """Test get_list_items fetches items with fields expanded."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "value": [
-            {"id": "1", "fields": {"Title": "Item A", "Status": "Active"}},
-            {"id": "2", "fields": {"Title": "Item B", "Status": "Done"}},
-        ]
-    }
-    mock_get.return_value = mock_response
-
-    result = await graph_client.get_list_items("site1", "list1")
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "1", "fields": {"Title": "Item A", "Status": "Active"}},
+                        {"id": "2", "fields": {"Title": "Item B", "Status": "Done"}},
+                    ]
+                },
+            )
+        ],
+    )
+    result = await client.get_list_items("site1", "list1")
     assert len(result["value"]) == 2
     assert result["value"][0]["fields"]["Title"] == "Item A"
-    call_url = mock_get.call_args[0][0]
+    call_url = str(calls[0].url)
     assert "sites/site1/lists/list1/items" in call_url
     assert "$expand=fields" in call_url
     assert "$top=100" in call_url
 
 
-@patch("requests.get")
-async def test_get_list_items_with_filter(mock_get, graph_client):
+async def test_get_list_items_with_filter(mock_context):
     """Test get_list_items applies OData filter when provided."""
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "value": [{"id": "1", "fields": {"Title": "Item A", "Status": "Active"}}]
-    }
-    mock_get.return_value = mock_response
-
-    result = await graph_client.get_list_items(
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"id": "1", "fields": {"Title": "Item A", "Status": "Active"}}
+                    ]
+                },
+            )
+        ],
+    )
+    result = await client.get_list_items(
         "site1", "list1", filter_query="fields/Status eq 'Active'"
     )
     assert len(result["value"]) == 1
-    call_url = mock_get.call_args[0][0]
-    assert "$filter=" in call_url
+    assert "$filter=" in str(calls[0].url)
 
 
-@patch("requests.post")
-async def test_create_site(mock_post, graph_client):
+async def test_list_sites(mock_context):
+    """Test list_sites queries the tenant-wide sites endpoint."""
+    site = {
+        "id": "contoso.sharepoint.com,guid1,guid2",
+        "name": "hr",
+        "displayName": "HR",
+        "webUrl": "https://contoso.sharepoint.com/sites/hr",
+    }
+    client, calls = make_client(
+        mock_context, [httpx.Response(200, json={"value": [site]})]
+    )
+    result = await client.list_sites()
+    assert result["value"][0]["name"] == "hr"
+    assert "sites?search=%2A" in str(calls[0].url)
+
+    # Name filter is passed through
+    client, calls = make_client(
+        mock_context, [httpx.Response(200, json={"value": [site]})]
+    )
+    await client.list_sites("hr team")
+    assert "sites?search=hr%20team" in str(calls[0].url)
+
+
+async def test_list_sites_paginates(mock_context):
+    """Test list_sites follows @odata.nextLink."""
+    next_url = "https://graph.microsoft.com/v1.0/sites?$skiptoken=p2"
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={"value": [{"id": "s1"}], "@odata.nextLink": next_url},
+            ),
+            httpx.Response(200, json={"value": [{"id": "s2"}]}),
+        ],
+    )
+    result = await client.list_sites()
+    assert [s["id"] for s in result["value"]] == ["s1", "s2"]
+    assert len(calls) == 2
+
+
+async def test_search_site(mock_context):
+    """Test search_site sends the site-scoped search request."""
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "hitsContainers": [
+                                {
+                                    "hits": [
+                                        {
+                                            "summary": "match",
+                                            "resource": {
+                                                "name": "doc.docx",
+                                                "webUrl": "url",
+                                            },
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+            )
+        ],
+    )
+    result = await client.search_site("site1", "report")
+    hits = result["value"][0]["hitsContainers"][0]["hits"]
+    assert hits[0]["resource"]["name"] == "doc.docx"
+    assert "sites/site1/search" in str(calls[0].url)
+    sent_body = json.loads(calls[0].content)
+    assert sent_body["requests"][0]["query"]["queryString"] == "report"
+    assert sent_body["requests"][0]["size"] == 25
+    assert sent_body["requests"][0]["entityTypes"] == [
+        "driveItem",
+        "listItem",
+        "list",
+    ]
+
+
+async def test_search_site_custom_size(mock_context):
+    """Test search_site passes a custom result size through."""
+    client, calls = make_client(mock_context, [httpx.Response(200, json={"value": []})])
+    await client.search_site("site1", "report", size=5)
+    sent_body = json.loads(calls[0].content)
+    assert sent_body["requests"][0]["size"] == 5
+
+
+async def test_search_site_empty_value(mock_context):
+    """Test search_site tolerates an empty value array (no results)."""
+    client, _ = make_client(mock_context, [httpx.Response(200, json={"value": []})])
+    result = await client.search_site("site1", "nothing")
+    assert result["value"] == []
+
+
+async def test_create_site(mock_context):
     """Test create_site sends POST with correct display name and alias."""
-    mock_response = MagicMock()
-    mock_response.status_code = 201
-    mock_response.json.return_value = {"id": "new_site_id", "displayName": "My Site"}
-    mock_post.return_value = mock_response
-
-    result = await graph_client.create_site("My Site", "mysite", "A test site")
+    client, calls = make_client(
+        mock_context,
+        [httpx.Response(201, json={"id": "new_site_id", "displayName": "My Site"})],
+    )
+    result = await client.create_site("My Site", "mysite", "A test site")
     assert result["id"] == "new_site_id"
-    sent_body = mock_post.call_args[1]["json"]
+    sent_body = json.loads(calls[0].content)
     assert sent_body["displayName"] == "My Site"
     assert sent_body["alias"] == "mysite"
     assert sent_body["description"] == "A test site"
