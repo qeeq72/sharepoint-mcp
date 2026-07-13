@@ -10,3 +10,18 @@ services:
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          # Document processing (pandas/xlsx, PDF) and chunked uploads buffer
+          # files in memory, so leave headroom above the idle footprint.
+          memory: 1g
+        reservations:
+          cpus: "0.25"
+          memory: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
