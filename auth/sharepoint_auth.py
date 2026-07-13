@@ -9,10 +9,8 @@ import msal
 import requests
 from config.settings import SHAREPOINT_CONFIG
 
-# Set up logging
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Logging is configured by the entry point (server.py); library modules
+# must not call basicConfig, or they override the DEBUG-aware setup.
 logger = logging.getLogger("sharepoint_auth")
 
 

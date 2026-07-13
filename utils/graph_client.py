@@ -10,9 +10,8 @@ from utils._graph_list_ops import _GraphListOpsMixin
 from utils._graph_page_ops import _GraphPageOpsMixin
 from utils._graph_site_ops import _GraphSiteOpsMixin
 
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Logging is configured by the entry point (server.py); library modules
+# must not call basicConfig, or they override the DEBUG-aware setup.
 logger = logging.getLogger("graph_client")
 
 
