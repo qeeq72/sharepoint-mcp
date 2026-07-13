@@ -30,3 +30,12 @@ def register_site_tools(mcp: FastMCP):
             "Provisioning tools disabled "
             "(set MCP_ENABLE_PROVISIONING_TOOLS=True to enable)"
         )
+
+    for name in settings.DISABLED_TOOLS:
+        try:
+            mcp.remove_tool(name)
+            logger.info(f"Tool disabled via MCP_DISABLED_TOOLS: {name}")
+        except Exception:
+            logger.warning(
+                f"MCP_DISABLED_TOOLS names unknown or already absent tool: {name}"
+            )

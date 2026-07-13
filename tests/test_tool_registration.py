@@ -39,3 +39,27 @@ def test_provisioning_tools_enabled_by_flag(monkeypatch):
     names = registered_tool_names(mcp)
     assert PROVISIONING_TOOLS <= names
     assert len(names) == 19
+
+
+def test_disabled_tools_list_removes_individual_tools(monkeypatch):
+    """Test that MCP_DISABLED_TOOLS hides specific tools by name."""
+    monkeypatch.setattr(settings, "ENABLE_PROVISIONING_TOOLS", False)
+    monkeypatch.setattr(
+        settings, "DISABLED_TOOLS", ["upload_document", "update_list_item"]
+    )
+    mcp = FastMCP("test")
+    register_site_tools(mcp)
+    names = registered_tool_names(mcp)
+    assert "upload_document" not in names
+    assert "update_list_item" not in names
+    assert "search_sharepoint" in names
+    assert len(names) == 12
+
+
+def test_disabled_tools_unknown_name_is_tolerated(monkeypatch):
+    """Test that an unknown name in MCP_DISABLED_TOOLS does not break startup."""
+    monkeypatch.setattr(settings, "ENABLE_PROVISIONING_TOOLS", False)
+    monkeypatch.setattr(settings, "DISABLED_TOOLS", ["no_such_tool"])
+    mcp = FastMCP("test")
+    register_site_tools(mcp)
+    assert len(registered_tool_names(mcp)) == 14

@@ -16,6 +16,12 @@ ENABLE_PROVISIONING_TOOLS = os.getenv(
     "MCP_ENABLE_PROVISIONING_TOOLS", "False"
 ).lower() in ("true", "1", "t")
 
+# Individual tools to hide regardless of group flags: comma-separated
+# tool names, e.g. "upload_document,update_list_item".
+DISABLED_TOOLS = [
+    s.strip() for s in os.getenv("MCP_DISABLED_TOOLS", "").split(",") if s.strip()
+]
+
 # SharePoint connection settings
 SHAREPOINT_CONFIG = {
     "tenant_id": os.getenv("TENANT_ID", ""),

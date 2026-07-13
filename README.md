@@ -175,6 +175,9 @@ The following MCP tools are exposed to the LLM:
 \* Provisioning tools are **disabled by default**; set
 `MCP_ENABLE_PROVISIONING_TOOLS=True` to register them.
 
+Individual tools can also be hidden by name via
+`MCP_DISABLED_TOOLS=tool_one,tool_two` (applied after the group flags).
+
 ### Multi-site search
 
 `search_sharepoint` accepts an optional `sites` argument (a list of site URLs or
