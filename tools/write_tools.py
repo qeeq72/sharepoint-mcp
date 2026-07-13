@@ -8,7 +8,7 @@ from typing import Dict, Any
 from mcp.server.fastmcp import FastMCP, Context
 
 from auth.sharepoint_auth import refresh_token_if_needed
-from tools._tool_helpers import _check_auth
+from tools._tool_helpers import _check_auth, ensure_site_allowed
 from utils.graph_client import GraphClient
 
 logger = logging.getLogger("sharepoint_tools")
@@ -47,6 +47,7 @@ def register_write_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             try:
                 file_bytes = base64.b64decode(file_content)
@@ -82,6 +83,7 @@ def register_write_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             item_info = await graph_client.create_list_item(site_id, list_id, fields)
             logger.info(f"Successfully created list item in list: {list_id}")
@@ -117,6 +119,7 @@ def register_write_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             item_info = await graph_client.update_list_item(
                 site_id, list_id, item_id, fields

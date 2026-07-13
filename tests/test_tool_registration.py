@@ -21,6 +21,7 @@ def registered_tool_names(mcp):
 def test_provisioning_tools_disabled_by_default(monkeypatch):
     """Test that provisioning tools are not registered by default."""
     monkeypatch.setattr(settings, "ENABLE_PROVISIONING_TOOLS", False)
+    monkeypatch.setattr(settings, "DISABLED_TOOLS", [])
     mcp = FastMCP("test")
     register_site_tools(mcp)
     names = registered_tool_names(mcp)
@@ -34,6 +35,7 @@ def test_provisioning_tools_disabled_by_default(monkeypatch):
 def test_provisioning_tools_enabled_by_flag(monkeypatch):
     """Test that the env flag brings the provisioning tools back."""
     monkeypatch.setattr(settings, "ENABLE_PROVISIONING_TOOLS", True)
+    monkeypatch.setattr(settings, "DISABLED_TOOLS", [])
     mcp = FastMCP("test")
     register_site_tools(mcp)
     names = registered_tool_names(mcp)

@@ -178,6 +178,13 @@ The following MCP tools are exposed to the LLM:
 Individual tools can also be hidden by name via
 `MCP_DISABLED_TOOLS=tool_one,tool_two` (applied after the group flags).
 
+`MCP_ALLOWED_SITES` (comma-separated site URLs or IDs) restricts every tool
+to the listed sites: `list_sites` filters its output, search defaults to the
+allowlist and rejects sites outside it, and per-site tools refuse other
+sites. This is an application-level guard — for a hard security boundary use
+the `Sites.Selected` application permission in Entra ID instead of
+`Sites.Read.All`/`Sites.ReadWrite.All`.
+
 ### Multi-site search
 
 `search_sharepoint` accepts an optional `sites` argument (a list of site URLs or

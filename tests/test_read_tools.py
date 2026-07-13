@@ -13,6 +13,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 
 from auth.sharepoint_auth import SharePointContext
+from config import settings
 from config.settings import SHAREPOINT_CONFIG
 from tools.read_tools import register_read_tools
 
@@ -102,6 +103,8 @@ def graph(monkeypatch):
         path = request.url.path
         if request.method == "GET" and path == "/v1.0/sites":
             return httpx.Response(200, json={"value": routing["sites"]})
+        if request.method == "GET" and path.endswith("/lists"):
+            return httpx.Response(200, json={"value": []})
         if request.method == "GET" and path.startswith("/v1.0/sites/"):
             # Site resolution by URL (.../sites/{domain}:/sites/{name})
             # or by ID (.../sites/{site_id})
@@ -280,6 +283,67 @@ async def test_search_passes_size(tool_fns, fake_ctx, graph):
     )
     sent_body = json.loads(graph["requests"][-1].content)
     assert sent_body["requests"][0]["size"] == 5
+
+
+async def test_list_sites_filtered_by_allowlist(tool_fns, fake_ctx, graph, monkeypatch):
+    """Test that list_sites hides sites outside MCP_ALLOWED_SITES."""
+    monkeypatch.setattr(settings, "ALLOWED_SITES", [HR_SITE["webUrl"]])
+    graph["sites"] = [HR_SITE, LEGAL_SITE]
+
+    result = json.loads(await tool_fns["list_sites"](fake_ctx))
+    assert [s["name"] for s in result] == ["hr"]
+
+
+async def test_search_rejects_disallowed_site(tool_fns, fake_ctx, graph, monkeypatch):
+    """Test that explicit sites outside the allowlist land in errors."""
+    monkeypatch.setattr(settings, "ALLOWED_SITES", [HR_SITE["webUrl"]])
+    graph["search"] = {HR_SITE["webUrl"]: search_hit("doc.docx")}
+
+    result = json.loads(
+        await tool_fns["search_sharepoint"](
+            fake_ctx, query="q", sites=[HR_SITE["webUrl"], LEGAL_SITE["webUrl"]]
+        )
+    )
+    assert result["sites_searched"] == 1
+    assert len(result["results"]) == 1
+    assert result["errors"] == [
+        {"site": LEGAL_SITE["webUrl"], "error": "Not allowed by MCP_ALLOWED_SITES"}
+    ]
+
+
+async def test_search_default_scope_is_allowlist(
+    tool_fns, fake_ctx, graph, monkeypatch
+):
+    """Test that with no sites and no SEARCH_SITES the allowlist is the scope."""
+    monkeypatch.setitem(SHAREPOINT_CONFIG, "search_sites", [])
+    monkeypatch.setattr(settings, "ALLOWED_SITES", [HR_SITE["webUrl"]])
+    graph["search"] = {HR_SITE["webUrl"]: search_hit("doc.docx")}
+
+    result = json.loads(await tool_fns["search_sharepoint"](fake_ctx, query="q"))
+    assert result["sites_searched"] == 1
+    # Tenant-wide listing was never requested
+    assert all(r.url.path != "/v1.0/sites" for r in graph["requests"])
+
+
+async def test_per_site_tool_rejects_disallowed_site(fake_ctx, graph, monkeypatch):
+    """Test that a per-site tool refuses a site outside the allowlist."""
+    import pytest as _pytest
+
+    from mcp.server.fastmcp import FastMCP
+    from tools.read_tools import register_read_tools as _register
+
+    monkeypatch.setattr(settings, "ALLOWED_SITES", [HR_SITE["webUrl"]])
+    mcp = FastMCP("test-allow")
+    _register(mcp)
+    get_lists = mcp._tool_manager.get_tool("get_lists").fn
+
+    # Disallowed: resolves LEGAL and refuses
+    with _pytest.raises(Exception, match="not allowed by MCP_ALLOWED_SITES"):
+        await get_lists(fake_ctx, site_id=LEGAL_SITE["id"])
+
+    # Allowed: resolves HR and proceeds to the lists request
+    result = json.loads(await get_lists(fake_ctx, site_id=HR_SITE["id"]))
+    assert result == []
 
 
 async def test_search_handles_empty_results(tool_fns, fake_ctx, graph):

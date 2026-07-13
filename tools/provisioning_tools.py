@@ -6,7 +6,7 @@ import logging
 from mcp.server.fastmcp import FastMCP, Context
 
 from auth.sharepoint_auth import refresh_token_if_needed
-from tools._tool_helpers import _check_auth
+from tools._tool_helpers import _check_auth, ensure_site_allowed
 from utils.content_generator import ContentGenerator
 from utils.graph_client import GraphClient
 
@@ -62,6 +62,7 @@ def register_provisioning_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             list_info = await graph_client.create_intelligent_list(
                 site_id, purpose, display_name
@@ -91,6 +92,7 @@ def register_provisioning_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             library_info = await graph_client.create_advanced_document_library(
                 site_id, display_name, doc_type
@@ -127,6 +129,7 @@ def register_provisioning_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             title = ContentGenerator.generate_page_title(purpose, name)
             template = ContentGenerator.map_purpose_to_template(purpose)
@@ -182,6 +185,7 @@ def register_provisioning_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             news_info = await graph_client.create_news_post(
                 site_id, title, description, content, promote=True

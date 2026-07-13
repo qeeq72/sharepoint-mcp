@@ -22,6 +22,15 @@ DISABLED_TOOLS = [
     s.strip() for s in os.getenv("MCP_DISABLED_TOOLS", "").split(",") if s.strip()
 ]
 
+# Site allowlist: comma-separated site URLs or site IDs. When set, every
+# tool refuses to touch sites outside this list, list_sites filters its
+# output, and the default search scope becomes this list. Empty = no
+# restriction. NOTE: this is enforced in application code only — for a
+# hard security boundary use the Sites.Selected application permission.
+ALLOWED_SITES = [
+    s.strip() for s in os.getenv("MCP_ALLOWED_SITES", "").split(",") if s.strip()
+]
+
 # SharePoint connection settings
 SHAREPOINT_CONFIG = {
     "tenant_id": os.getenv("TENANT_ID", ""),

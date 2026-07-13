@@ -9,8 +9,14 @@ from typing import List, Optional
 from mcp.server.fastmcp import FastMCP, Context
 
 from auth.sharepoint_auth import refresh_token_if_needed
+from config import settings
 from config.settings import SHAREPOINT_CONFIG
-from tools._tool_helpers import _check_auth
+from tools._tool_helpers import (
+    _check_auth,
+    ensure_site_allowed,
+    is_site_allowed,
+    resolve_site,
+)
 from utils.document_processor import DocumentProcessor
 from utils.graph_client import GraphClient
 
@@ -114,31 +120,15 @@ def register_read_tools(mcp: FastMCP):
                     "web_url": site.get("webUrl", "Unknown"),
                 }
                 for site in result.get("value", [])
+                if is_site_allowed(
+                    site_id=site.get("id", ""), web_url=site.get("webUrl", "")
+                )
             ]
             logger.info(f"Successfully retrieved {len(formatted_sites)} sites")
             return json.dumps(formatted_sites, indent=2)
         except Exception as e:
             logger.error(f"Error in list_sites: {str(e)}")
             raise
-
-    async def _resolve_site(graph_client: GraphClient, site: str) -> dict:
-        """Resolve a site URL or site ID to {"id", "web_url"}.
-
-        The web URL is required in both cases: the search request scopes to
-        a site with a KQL path filter, which takes a URL, not an ID.
-        """
-        if "sharepoint.com" in site and ("://" in site or "/" in site):
-            site_parts = site.replace("https://", "").replace("http://", "").split("/")
-            domain = site_parts[0]
-            site_name = site_parts[2] if len(site_parts) > 2 else "root"
-            site_info = await graph_client.get_site_info(domain, site_name)
-        else:
-            site_info = await graph_client.get(f"sites/{site}")
-        site_id = site_info.get("id")
-        web_url = site_info.get("webUrl")
-        if not site_id or not web_url:
-            raise Exception(f"Could not resolve site: {site}")
-        return {"id": site_id, "web_url": web_url}
 
     @mcp.tool()
     async def search_sharepoint(
@@ -153,7 +143,11 @@ def register_read_tools(mcp: FastMCP):
         Search scope is resolved in priority order:
         1. The `sites` argument (site URLs or site IDs).
         2. The SEARCH_SITES environment variable (comma-separated), if set.
-        3. All sites in the tenant, capped at `max_sites`.
+        3. The MCP_ALLOWED_SITES allowlist, if set.
+        4. All sites in the tenant, capped at `max_sites`.
+
+        When MCP_ALLOWED_SITES is set, sites outside the allowlist are
+        rejected (reported in the `errors` field, the rest are searched).
 
         Sites that have more matches than `size` are listed in the
         `more_results_available_on` field of the response — narrow the
@@ -174,13 +168,23 @@ def register_read_tools(mcp: FastMCP):
             graph_client = GraphClient(sp_ctx)
 
             truncated = False
-            if sites:
-                targets = [await _resolve_site(graph_client, s) for s in sites]
-            elif SHAREPOINT_CONFIG["search_sites"]:
-                targets = [
-                    await _resolve_site(graph_client, s)
-                    for s in SHAREPOINT_CONFIG["search_sites"]
-                ]
+            errors = []
+            scope = sites or SHAREPOINT_CONFIG["search_sites"] or settings.ALLOWED_SITES
+            if scope:
+                targets = []
+                for s in scope:
+                    resolved = await resolve_site(graph_client, s)
+                    if is_site_allowed(
+                        site_id=resolved["id"], web_url=resolved["web_url"]
+                    ):
+                        targets.append(resolved)
+                    else:
+                        errors.append(
+                            {
+                                "site": s,
+                                "error": "Not allowed by MCP_ALLOWED_SITES",
+                            }
+                        )
             else:
                 all_sites = (await graph_client.list_sites()).get("value", [])
                 if len(all_sites) > max_sites:
@@ -205,7 +209,6 @@ def register_read_tools(mcp: FastMCP):
             )
 
             formatted_results = []
-            errors = []
             more_results_available_on = []
             for target, outcome in zip(targets, search_outcomes):
                 if isinstance(outcome, BaseException):
@@ -265,6 +268,7 @@ def register_read_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             content = await graph_client.get_document_content(
                 site_id, drive_id, item_id
@@ -294,6 +298,7 @@ def register_read_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             result = await graph_client.list_folder_contents(
                 site_id, drive_id, folder_path
@@ -336,6 +341,7 @@ def register_read_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             content = await graph_client.get_document_content_by_path(
                 site_id, drive_id, file_path
@@ -370,6 +376,7 @@ def register_read_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             item = await graph_client.get_item_metadata_by_path(
                 site_id, drive_id, item_path
@@ -419,6 +426,7 @@ def register_read_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             content = await graph_client.get_document_content(
                 site_id, drive_id, item_id
@@ -456,6 +464,7 @@ def register_read_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             result = await graph_client.get_lists(site_id)
             lists = result.get("value", [])
@@ -503,6 +512,7 @@ def register_read_tools(mcp: FastMCP):
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
+            await ensure_site_allowed(graph_client, site_id)
 
             result = await graph_client.get_list_items(
                 site_id, list_id, top=top, filter_query=filter_query
