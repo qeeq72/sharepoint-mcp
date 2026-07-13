@@ -70,6 +70,9 @@ def _pin_env_dependent_settings(monkeypatch):
     monkeypatch.setattr(settings, "ALLOWED_SITES", [])
     monkeypatch.setitem(SHAREPOINT_CONFIG, "search_sites", [])
     monkeypatch.setitem(SHAREPOINT_CONFIG, "search_region", "")
+    monkeypatch.setitem(
+        SHAREPOINT_CONFIG, "site_url", "https://contoso.sharepoint.com/sites/hr"
+    )
 
 
 @pytest.fixture
@@ -352,6 +355,45 @@ async def test_per_site_tool_rejects_disallowed_site(fake_ctx, graph, monkeypatc
     # Allowed: resolves HR and proceeds to the lists request
     result = json.loads(await get_lists(fake_ctx, site_id=HR_SITE["id"]))
     assert result == []
+
+
+async def test_allowlist_accepts_bare_site_names(
+    tool_fns, fake_ctx, graph, monkeypatch
+):
+    """Test that allowlist entries can be bare site names and sites resolve."""
+    monkeypatch.setattr(settings, "ALLOWED_SITES", ["hr"])
+    graph["sites"] = [HR_SITE, LEGAL_SITE]
+    graph["search"] = {HR_SITE["webUrl"]: search_hit("doc.docx")}
+
+    # list_sites keeps only the named site
+    listed = json.loads(await tool_fns["list_sites"](fake_ctx))
+    assert [s["name"] for s in listed] == ["hr"]
+
+    # default scope resolves the bare name via the tenant domain
+    result = json.loads(await tool_fns["search_sharepoint"](fake_ctx, query="q"))
+    assert result["sites_searched"] == 1
+    assert result["errors"] == []
+    assert result["results"][0]["site"] == HR_SITE["webUrl"]
+
+
+async def test_search_tolerates_unresolvable_site(tool_fns, fake_ctx, graph):
+    """Test that a site that fails to resolve lands in errors, not a crash."""
+    graph["search"] = {HR_SITE["webUrl"]: search_hit("doc.docx")}
+
+    result = json.loads(
+        await tool_fns["search_sharepoint"](
+            fake_ctx,
+            query="q",
+            sites=[
+                HR_SITE["webUrl"],
+                "https://wrong-tenant.sharepoint.com/sites/nope",
+            ],
+        )
+    )
+    assert result["sites_searched"] == 1
+    assert len(result["results"]) == 1
+    assert len(result["errors"]) == 1
+    assert "wrong-tenant" in result["errors"][0]["site"]
 
 
 async def test_search_handles_empty_results(tool_fns, fake_ctx, graph):

@@ -173,7 +173,12 @@ def register_read_tools(mcp: FastMCP):
             if scope:
                 targets = []
                 for s in scope:
-                    resolved = await resolve_site(graph_client, s)
+                    try:
+                        resolved = await resolve_site(graph_client, s)
+                    except Exception as resolve_error:
+                        logger.error(f"Could not resolve site {s}: {resolve_error}")
+                        errors.append({"site": s, "error": str(resolve_error)})
+                        continue
                     if is_site_allowed(
                         site_id=resolved["id"], web_url=resolved["web_url"]
                     ):

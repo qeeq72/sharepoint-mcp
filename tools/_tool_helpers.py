@@ -18,27 +18,43 @@ def _normalize_site_ref(value: str) -> str:
 
 
 def is_site_allowed(site_id: str = "", web_url: str = "") -> bool:
-    """Check a site (by ID and/or URL) against MCP_ALLOWED_SITES.
+    """Check a site (by ID, URL, or bare name) against MCP_ALLOWED_SITES.
 
-    An empty allowlist means no restriction.
+    Allowlist entries may be full site URLs, composite site IDs, or bare
+    site names (the trailing /sites/<name> segment of the URL). An empty
+    allowlist means no restriction.
     """
     allowed = settings.ALLOWED_SITES
     if not allowed:
         return True
     normalized = {_normalize_site_ref(entry) for entry in allowed}
     candidates = {_normalize_site_ref(v) for v in (site_id, web_url) if v}
+    if web_url:
+        candidates.add(_normalize_site_ref(web_url).rsplit("/", 1)[-1])
     return bool(candidates & normalized)
 
 
 async def resolve_site(graph_client, site: str) -> dict:
-    """Resolve a site URL or site ID to {"id", "web_url"}."""
+    """Resolve a site URL, composite site ID, or bare name to {"id", "web_url"}.
+
+    Bare names (no URL, no composite-ID commas) are resolved under the
+    tenant domain taken from SITE_URL.
+    """
     if "sharepoint.com" in site and ("://" in site or "/" in site):
         site_parts = site.replace("https://", "").replace("http://", "").split("/")
         domain = site_parts[0]
         site_name = site_parts[2] if len(site_parts) > 2 else "root"
         site_info = await graph_client.get_site_info(domain, site_name)
-    else:
+    elif "," in site:
         site_info = await graph_client.get(f"sites/{site}")
+    else:
+        domain = (
+            settings.SHAREPOINT_CONFIG["site_url"]
+            .replace("https://", "")
+            .replace("http://", "")
+            .split("/")[0]
+        )
+        site_info = await graph_client.get_site_info(domain, site)
     site_id = site_info.get("id")
     web_url = site_info.get("webUrl")
     if not site_id or not web_url:
