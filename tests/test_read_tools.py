@@ -64,6 +64,14 @@ def search_hit(name, more_results=False):
     }
 
 
+@pytest.fixture(autouse=True)
+def _pin_env_dependent_settings(monkeypatch):
+    """Isolate tests from the developer's local .env values."""
+    monkeypatch.setattr(settings, "ALLOWED_SITES", [])
+    monkeypatch.setitem(SHAREPOINT_CONFIG, "search_sites", [])
+    monkeypatch.setitem(SHAREPOINT_CONFIG, "search_region", "")
+
+
 @pytest.fixture
 def tool_fns():
     """Register read tools on a fresh FastMCP and return them by name."""

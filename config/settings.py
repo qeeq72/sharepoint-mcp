@@ -16,6 +16,13 @@ ENABLE_PROVISIONING_TOOLS = os.getenv(
     "MCP_ENABLE_PROVISIONING_TOOLS", "False"
 ).lower() in ("true", "1", "t")
 
+# Document-parsing tools (get_document_content, get_document_by_path)
+# return server-side parsed text via pandas/PyPDF2/python-docx. Disabled
+# by default — download_file covers raw retrieval.
+ENABLE_DOCUMENT_PARSING_TOOLS = os.getenv(
+    "MCP_ENABLE_DOCUMENT_PARSING_TOOLS", "False"
+).lower() in ("true", "1", "t")
+
 # Individual tools to hide regardless of group flags: comma-separated
 # tool names, e.g. "upload_document,update_list_item".
 DISABLED_TOOLS = [

@@ -158,8 +158,8 @@ The following MCP tools are exposed to the LLM:
 | `get_site_info` | Get name, description, URL, and metadata of the SharePoint site |
 | `list_document_libraries` | List all document libraries (drives) in the site |
 | `list_folder_contents` | Browse files and folders within a document library by path |
-| `get_document_content` | Read and parse DOCX, PDF, XLSX, CSV, or TXT files |
-| `get_document_by_path` | Retrieve document content by file path |
+| `get_document_content`† | Read and parse DOCX, PDF, XLSX, CSV, or TXT files |
+| `get_document_by_path`† | Retrieve document content by file path |
 | `get_item_metadata` | Get metadata for a file or folder |
 | `list_sites` | List sites in the tenant, optionally filtered by name |
 | `search_sharepoint` | Full-text search across one or more sites (see below) |
@@ -174,6 +174,10 @@ The following MCP tools are exposed to the LLM:
 
 \* Provisioning tools are **disabled by default**; set
 `MCP_ENABLE_PROVISIONING_TOOLS=True` to register them.
+
+† Document parsing tools are **disabled by default** (use `download_file`
+for raw content); set `MCP_ENABLE_DOCUMENT_PARSING_TOOLS=True` to register
+them.
 
 Individual tools can also be hidden by name via
 `MCP_DISABLED_TOOLS=tool_one,tool_two` (applied after the group flags).

@@ -31,6 +31,14 @@ def register_site_tools(mcp: FastMCP):
             "(set MCP_ENABLE_PROVISIONING_TOOLS=True to enable)"
         )
 
+    if not settings.ENABLE_DOCUMENT_PARSING_TOOLS:
+        for name in ("get_document_content", "get_document_by_path"):
+            mcp.remove_tool(name)
+        logger.info(
+            "Document parsing tools disabled "
+            "(set MCP_ENABLE_DOCUMENT_PARSING_TOOLS=True to enable)"
+        )
+
     for name in settings.DISABLED_TOOLS:
         try:
             mcp.remove_tool(name)
