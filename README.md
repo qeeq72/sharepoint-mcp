@@ -166,11 +166,14 @@ The following MCP tools are exposed to the LLM:
 | `upload_document` | Upload a file to a document library |
 | `create_list_item` | Create a new item in a SharePoint list |
 | `update_list_item` | Update an existing item in a SharePoint list |
-| `create_intelligent_list` | Provision a list with an AI-optimized schema |
-| `create_advanced_document_library` | Create a document library with rich metadata |
-| `create_modern_page` | Publish a modern SharePoint page |
-| `create_news_post` | Publish a news article to the site |
-| `create_sharepoint_site` | Provision a new SharePoint team site |
+| `create_intelligent_list`* | Provision a list with an AI-optimized schema |
+| `create_advanced_document_library`* | Create a document library with rich metadata |
+| `create_modern_page`* | Publish a modern SharePoint page |
+| `create_news_post`* | Publish a news article to the site |
+| `create_sharepoint_site`* | Provision a new SharePoint team site |
+
+\* Provisioning tools are **disabled by default**; set
+`MCP_ENABLE_PROVISIONING_TOOLS=True` to register them.
 
 ### Multi-site search
 

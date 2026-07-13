@@ -10,6 +10,12 @@ load_dotenv()
 APP_NAME = "SharePoint MCP"
 DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "t")
 
+# Provisioning tools (create sites/lists/libraries/pages) are the most
+# destructive tool group and are disabled unless explicitly enabled.
+ENABLE_PROVISIONING_TOOLS = os.getenv(
+    "MCP_ENABLE_PROVISIONING_TOOLS", "False"
+).lower() in ("true", "1", "t")
+
 # SharePoint connection settings
 SHAREPOINT_CONFIG = {
     "tenant_id": os.getenv("TENANT_ID", ""),
