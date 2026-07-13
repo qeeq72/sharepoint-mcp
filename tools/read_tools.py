@@ -27,23 +27,24 @@ def register_read_tools(mcp: FastMCP):
     """Register read-only SharePoint tools with the MCP server."""
 
     @mcp.tool()
-    async def get_site_info(ctx: Context) -> str:
-        """Get basic information about the SharePoint site."""
-        logger.info("Tool called: get_site_info")
+    async def get_site_info(ctx: Context, site: str = "") -> str:
+        """Get basic information about a SharePoint site.
+
+        Args:
+            site: Optional site URL, site ID, or site name; defaults to the
+                site configured via SITE_URL
+        """
+        logger.info(f"Tool called: get_site_info (site={site or 'default'})")
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_parts = (
-                SHAREPOINT_CONFIG["site_url"].replace("https://", "").split("/")
-            )
-            domain = site_parts[0]
-            site_name = site_parts[2] if len(site_parts) > 2 else "root"
-            logger.info(f"Getting info for site: {site_name} in domain: {domain}")
-
-            site_info = await graph_client.get_site_info(domain, site_name)
+            target = site or SHAREPOINT_CONFIG["site_url"]
+            await ensure_site_allowed(graph_client, target)
+            resolved = await resolve_site(graph_client, target)
+            site_info = await graph_client.get(f"sites/{resolved['id']}")
             result = {
                 "name": site_info.get("displayName", "Unknown"),
                 "description": site_info.get("description", "No description"),
@@ -59,25 +60,27 @@ def register_read_tools(mcp: FastMCP):
             raise
 
     @mcp.tool()
-    async def list_document_libraries(ctx: Context) -> str:
-        """List all document libraries in the SharePoint site."""
-        logger.info("Tool called: list_document_libraries")
+    async def list_document_libraries(ctx: Context, site: str = "") -> str:
+        """List document libraries (drives) of a SharePoint site.
+
+        Use the returned drive `id` with list_folder_contents and
+        download_file.
+
+        Args:
+            site: Optional site URL, site ID, or site name; defaults to the
+                site configured via SITE_URL
+        """
+        logger.info(f"Tool called: list_document_libraries (site={site or 'default'})")
         try:
             sp_ctx = ctx.request_context.lifespan_context
             _check_auth(sp_ctx)
             await refresh_token_if_needed(sp_ctx)
             graph_client = GraphClient(sp_ctx)
 
-            site_parts = (
-                SHAREPOINT_CONFIG["site_url"].replace("https://", "").split("/")
-            )
-            domain = site_parts[0]
-            site_name = site_parts[2] if len(site_parts) > 2 else "root"
-            logger.info(
-                f"Listing document libraries for site: {site_name} in domain: {domain}"
-            )
-
-            result = await graph_client.list_document_libraries(domain, site_name)
+            target = site or SHAREPOINT_CONFIG["site_url"]
+            await ensure_site_allowed(graph_client, target)
+            resolved = await resolve_site(graph_client, target)
+            result = await graph_client.get(f"sites/{resolved['id']}/drives")
             drives = result.get("value", [])
             formatted_drives = [
                 {

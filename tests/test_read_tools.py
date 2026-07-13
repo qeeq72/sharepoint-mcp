@@ -82,7 +82,7 @@ def tool_fns():
     register_read_tools(mcp)
     return {
         name: mcp._tool_manager.get_tool(name).fn
-        for name in ("list_sites", "search_sharepoint")
+        for name in ("list_sites", "search_sharepoint", "list_document_libraries")
     }
 
 
@@ -116,6 +116,20 @@ def graph(monkeypatch):
             return httpx.Response(200, json={"value": routing["sites"]})
         if request.method == "GET" and path.endswith("/lists"):
             return httpx.Response(200, json={"value": []})
+        if request.method == "GET" and path.endswith("/drives"):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "drive-1",
+                            "name": "Documents",
+                            "driveType": "documentLibrary",
+                            "webUrl": "https://contoso.sharepoint.com/sites/x/Docs",
+                        }
+                    ]
+                },
+            )
         if request.method == "GET" and path.startswith("/v1.0/sites/"):
             # Site resolution by URL (.../sites/{domain}:/sites/{name})
             # or by ID (.../sites/{site_id})
@@ -394,6 +408,36 @@ async def test_search_tolerates_unresolvable_site(tool_fns, fake_ctx, graph):
     assert len(result["results"]) == 1
     assert len(result["errors"]) == 1
     assert "wrong-tenant" in result["errors"][0]["site"]
+
+
+async def test_list_document_libraries_accepts_site(tool_fns, fake_ctx, graph):
+    """Test that list_document_libraries takes any site, not only SITE_URL."""
+    result = json.loads(
+        await tool_fns["list_document_libraries"](fake_ctx, site=LEGAL_SITE["webUrl"])
+    )
+    assert result[0]["id"] == "drive-1"
+    assert result[0]["name"] == "Documents"
+    # The drives request was made against the resolved LEGAL site
+    drives_calls = [r for r in graph["requests"] if str(r.url).endswith("/drives")]
+    assert LEGAL_SITE["id"] in str(drives_calls[0].url)
+
+
+async def test_list_document_libraries_defaults_to_site_url(tool_fns, fake_ctx, graph):
+    """Test that without a site argument the configured SITE_URL is used."""
+    result = json.loads(await tool_fns["list_document_libraries"](fake_ctx))
+    assert result[0]["id"] == "drive-1"
+    # SITE_URL is pinned to the HR site in the autouse fixture
+    drives_calls = [r for r in graph["requests"] if str(r.url).endswith("/drives")]
+    assert HR_SITE["id"] in str(drives_calls[0].url)
+
+
+async def test_list_document_libraries_respects_allowlist(
+    tool_fns, fake_ctx, graph, monkeypatch
+):
+    """Test that a site outside the allowlist is refused."""
+    monkeypatch.setattr(settings, "ALLOWED_SITES", [HR_SITE["webUrl"]])
+    with pytest.raises(Exception, match="not allowed by MCP_ALLOWED_SITES"):
+        await tool_fns["list_document_libraries"](fake_ctx, site=LEGAL_SITE["webUrl"])
 
 
 async def test_search_handles_empty_results(tool_fns, fake_ctx, graph):
