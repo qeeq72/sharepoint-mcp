@@ -8,11 +8,13 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 
+import uvicorn
 from mcp.server.fastmcp import FastMCP
 
 from auth.sharepoint_auth import SharePointContext, get_auth_context
 from config.settings import APP_NAME, DEBUG
 from utils._graph_http import close_http_client
+from utils.asgi_auth import BearerAuthMiddleware
 from tools.site_tools import register_site_tools
 
 # Set logging level
@@ -86,11 +88,27 @@ def main():
 
     try:
         logger.info(f"Starting {APP_NAME} server (transport={args.transport})...")
-        if args.transport != "stdio":
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-            logger.info(f"HTTP server binding to {args.host}:{args.port}")
-        mcp.run(transport=args.transport)
+        if args.transport == "stdio":
+            mcp.run(transport="stdio")
+            return
+
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        logger.info(f"HTTP server binding to {args.host}:{args.port}")
+        app = (
+            mcp.streamable_http_app()
+            if args.transport == "streamable-http"
+            else mcp.sse_app()
+        )
+        auth_token = os.getenv("MCP_AUTH_TOKEN", "")
+        if auth_token:
+            app = BearerAuthMiddleware(app, auth_token)
+            logger.info("Bearer authentication enabled for the HTTP endpoint")
+        else:
+            logger.warning(
+                "MCP_AUTH_TOKEN is not set — the HTTP endpoint is unauthenticated"
+            )
+        uvicorn.run(app, host=args.host, port=args.port)
     except Exception as e:
         logger.error(f"Error occurred during MCP server startup: {e}")
         raise
