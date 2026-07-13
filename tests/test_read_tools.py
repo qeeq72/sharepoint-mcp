@@ -91,7 +91,8 @@ def graph(monkeypatch):
 
     Returns a routing dict the test can mutate:
       sites: list returned by GET /sites?search=...
-      search: {site_id: httpx.Response | dict} for POST /sites/{id}/search
+      search: {site_web_url: httpx.Response | dict} for POST /search/query
+        (the site is recovered from the KQL path filter in the request body)
       requests: every httpx.Request made
     """
     routing = {"sites": [], "search": {}, "requests": []}
@@ -102,20 +103,23 @@ def graph(monkeypatch):
         if request.method == "GET" and path == "/v1.0/sites":
             return httpx.Response(200, json={"value": routing["sites"]})
         if request.method == "GET" and path.startswith("/v1.0/sites/"):
-            # Site resolution by URL: /v1.0/sites/{domain}:/sites/{name}
-            site_name = path.rsplit("/", 1)[-1]
+            # Site resolution by URL (.../sites/{domain}:/sites/{name})
+            # or by ID (.../sites/{site_id})
+            tail = path.rsplit("/", 1)[-1]
             for site in (HR_SITE, LEGAL_SITE, DOCS_SITE):
-                if site["name"] == site_name:
+                if site["name"] == tail or path.endswith(site["id"]):
                     return httpx.Response(200, json=site)
             return httpx.Response(404, text="site not found")
-        if request.method == "POST" and path.endswith("/search"):
-            site_id = path.removeprefix("/v1.0/sites/").removesuffix("/search")
-            outcome = routing["search"].get(site_id)
-            if isinstance(outcome, httpx.Response):
-                return outcome
-            if outcome is not None:
-                return httpx.Response(200, json=outcome)
-            return httpx.Response(404, text=f"no search stub for {site_id}")
+        if request.method == "POST" and path == "/v1.0/search/query":
+            query_string = json.loads(request.content)["requests"][0]["query"][
+                "queryString"
+            ]
+            for web_url, outcome in routing["search"].items():
+                if f'path:"{web_url}"' in query_string:
+                    if isinstance(outcome, httpx.Response):
+                        return outcome
+                    return httpx.Response(200, json=outcome)
+            return httpx.Response(404, text=f"no search stub for: {query_string}")
         return httpx.Response(404, text=f"unstubbed: {request.method} {path}")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -146,10 +150,10 @@ async def test_list_sites_tool_passes_query(tool_fns, fake_ctx, graph):
 
 
 async def test_search_with_explicit_site_urls(tool_fns, fake_ctx, graph):
-    """Test that site URLs are resolved to IDs and results tagged per site."""
+    """Test that site URLs are resolved and results tagged per site."""
     graph["search"] = {
-        HR_SITE["id"]: search_hit("vacation.docx"),
-        LEGAL_SITE["id"]: search_hit("contract.docx"),
+        HR_SITE["webUrl"]: search_hit("vacation.docx"),
+        LEGAL_SITE["webUrl"]: search_hit("contract.docx"),
     }
 
     result = json.loads(
@@ -169,23 +173,24 @@ async def test_search_with_explicit_site_urls(tool_fns, fake_ctx, graph):
     }
 
 
-async def test_search_with_site_ids_skips_resolution(tool_fns, fake_ctx, graph):
-    """Test that site IDs are used as-is, without a get_site_info round-trip."""
-    graph["search"] = {HR_SITE["id"]: search_hit("doc.docx")}
+async def test_search_with_site_ids(tool_fns, fake_ctx, graph):
+    """Test that site IDs are resolved to their web URL for the path filter."""
+    graph["search"] = {HR_SITE["webUrl"]: search_hit("doc.docx")}
 
     result = json.loads(
         await tool_fns["search_sharepoint"](fake_ctx, query="q", sites=[HR_SITE["id"]])
     )
     assert result["sites_searched"] == 1
     assert len(result["results"]) == 1
-    # Only the search POST was made — no site-info GET
-    assert [r.method for r in graph["requests"]] == ["POST"]
+    assert result["results"][0]["site"] == HR_SITE["webUrl"]
+    # The ID was resolved via GET /sites/{id} before searching
+    assert [r.method for r in graph["requests"]] == ["GET", "POST"]
 
 
 async def test_search_scope_falls_back_to_env(tool_fns, fake_ctx, graph, monkeypatch):
     """Test that SEARCH_SITES config defines the scope when sites is empty."""
     monkeypatch.setitem(SHAREPOINT_CONFIG, "search_sites", [HR_SITE["id"]])
-    graph["search"] = {HR_SITE["id"]: search_hit("doc.docx")}
+    graph["search"] = {HR_SITE["webUrl"]: search_hit("doc.docx")}
 
     result = json.loads(await tool_fns["search_sharepoint"](fake_ctx, query="q"))
     assert result["sites_searched"] == 1
@@ -200,8 +205,8 @@ async def test_search_scope_defaults_to_all_sites(
     monkeypatch.setitem(SHAREPOINT_CONFIG, "search_sites", [])
     graph["sites"] = [HR_SITE, LEGAL_SITE]
     graph["search"] = {
-        HR_SITE["id"]: search_hit("a.docx"),
-        LEGAL_SITE["id"]: search_hit("b.docx"),
+        HR_SITE["webUrl"]: search_hit("a.docx"),
+        LEGAL_SITE["webUrl"]: search_hit("b.docx"),
     }
 
     result = json.loads(await tool_fns["search_sharepoint"](fake_ctx, query="q"))
@@ -215,8 +220,8 @@ async def test_search_truncates_at_max_sites(tool_fns, fake_ctx, graph, monkeypa
     monkeypatch.setitem(SHAREPOINT_CONFIG, "search_sites", [])
     graph["sites"] = [HR_SITE, LEGAL_SITE, DOCS_SITE]
     graph["search"] = {
-        HR_SITE["id"]: search_hit("a.docx"),
-        LEGAL_SITE["id"]: search_hit("b.docx"),
+        HR_SITE["webUrl"]: search_hit("a.docx"),
+        LEGAL_SITE["webUrl"]: search_hit("b.docx"),
     }
 
     result = json.loads(
@@ -225,14 +230,17 @@ async def test_search_truncates_at_max_sites(tool_fns, fake_ctx, graph, monkeypa
     assert result["sites_searched"] == 2
     assert result["truncated"] is True
     # The third site was never searched
-    assert all(DOCS_SITE["id"] not in r.url.path for r in graph["requests"])
+    search_bodies = [
+        r.content.decode() for r in graph["requests"] if r.method == "POST"
+    ]
+    assert all(DOCS_SITE["webUrl"] not in body for body in search_bodies)
 
 
 async def test_search_tolerates_per_site_errors(tool_fns, fake_ctx, graph):
     """Test that one failing site lands in errors without failing the search."""
     graph["search"] = {
-        HR_SITE["id"]: search_hit("doc.docx"),
-        LEGAL_SITE["id"]: httpx.Response(403, text="Access denied"),
+        HR_SITE["webUrl"]: search_hit("doc.docx"),
+        LEGAL_SITE["webUrl"]: httpx.Response(403, text="Access denied"),
     }
 
     result = json.loads(
@@ -242,17 +250,17 @@ async def test_search_tolerates_per_site_errors(tool_fns, fake_ctx, graph):
     )
     assert result["sites_searched"] == 2
     assert len(result["results"]) == 1
-    assert result["results"][0]["site"] == HR_SITE["id"]
+    assert result["results"][0]["site"] == HR_SITE["webUrl"]
     assert len(result["errors"]) == 1
-    assert result["errors"][0]["site"] == LEGAL_SITE["id"]
+    assert result["errors"][0]["site"] == LEGAL_SITE["webUrl"]
     assert "403" in result["errors"][0]["error"]
 
 
 async def test_search_reports_more_results(tool_fns, fake_ctx, graph):
     """Test that sites with more matches than size are flagged in the response."""
     graph["search"] = {
-        HR_SITE["id"]: search_hit("a.docx", more_results=True),
-        LEGAL_SITE["id"]: search_hit("b.docx"),
+        HR_SITE["webUrl"]: search_hit("a.docx", more_results=True),
+        LEGAL_SITE["webUrl"]: search_hit("b.docx"),
     }
 
     result = json.loads(
@@ -260,23 +268,23 @@ async def test_search_reports_more_results(tool_fns, fake_ctx, graph):
             fake_ctx, query="q", sites=[HR_SITE["id"], LEGAL_SITE["id"]]
         )
     )
-    assert result["more_results_available_on"] == [HR_SITE["id"]]
+    assert result["more_results_available_on"] == [HR_SITE["webUrl"]]
 
 
 async def test_search_passes_size(tool_fns, fake_ctx, graph):
     """Test that the size argument reaches the Graph search request body."""
-    graph["search"] = {HR_SITE["id"]: search_hit("a.docx")}
+    graph["search"] = {HR_SITE["webUrl"]: search_hit("a.docx")}
 
     await tool_fns["search_sharepoint"](
-        fake_ctx, query="q", sites=[HR_SITE["id"]], size=5
+        fake_ctx, query="q", sites=[HR_SITE["webUrl"]], size=5
     )
-    sent_body = json.loads(graph["requests"][0].content)
+    sent_body = json.loads(graph["requests"][-1].content)
     assert sent_body["requests"][0]["size"] == 5
 
 
 async def test_search_handles_empty_results(tool_fns, fake_ctx, graph):
     """Test that an empty search response yields empty results, not a crash."""
-    graph["search"] = {HR_SITE["id"]: {"value": []}}
+    graph["search"] = {HR_SITE["webUrl"]: {"value": []}}
 
     result = json.loads(
         await tool_fns["search_sharepoint"](fake_ctx, query="q", sites=[HR_SITE["id"]])

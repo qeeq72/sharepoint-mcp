@@ -122,17 +122,23 @@ def register_read_tools(mcp: FastMCP):
             raise
 
     async def _resolve_site(graph_client: GraphClient, site: str) -> dict:
-        """Resolve a site URL or site ID to {"id", "web_url"}."""
+        """Resolve a site URL or site ID to {"id", "web_url"}.
+
+        The web URL is required in both cases: the search request scopes to
+        a site with a KQL path filter, which takes a URL, not an ID.
+        """
         if "sharepoint.com" in site and ("://" in site or "/" in site):
             site_parts = site.replace("https://", "").replace("http://", "").split("/")
             domain = site_parts[0]
             site_name = site_parts[2] if len(site_parts) > 2 else "root"
             site_info = await graph_client.get_site_info(domain, site_name)
-            site_id = site_info.get("id")
-            if not site_id:
-                raise Exception(f"Could not resolve site ID for: {site}")
-            return {"id": site_id, "web_url": site_info.get("webUrl", site)}
-        return {"id": site, "web_url": site}
+        else:
+            site_info = await graph_client.get(f"sites/{site}")
+        site_id = site_info.get("id")
+        web_url = site_info.get("webUrl")
+        if not site_id or not web_url:
+            raise Exception(f"Could not resolve site: {site}")
+        return {"id": site_id, "web_url": web_url}
 
     @mcp.tool()
     async def search_sharepoint(
@@ -181,14 +187,20 @@ def register_read_tools(mcp: FastMCP):
                     truncated = True
                     all_sites = all_sites[:max_sites]
                 targets = [
-                    {"id": s["id"], "web_url": s.get("webUrl", "Unknown")}
+                    {"id": s["id"], "web_url": s["webUrl"]}
                     for s in all_sites
-                    if s.get("id")
+                    if s.get("id") and s.get("webUrl")
                 ]
             logger.info(f"Searching for '{query}' across {len(targets)} site(s)")
 
+            region = SHAREPOINT_CONFIG["search_region"] or None
             search_outcomes = await asyncio.gather(
-                *[graph_client.search_site(t["id"], query, size=size) for t in targets],
+                *[
+                    graph_client.search_site(
+                        t["web_url"], query, size=size, region=region
+                    )
+                    for t in targets
+                ],
                 return_exceptions=True,
             )
 

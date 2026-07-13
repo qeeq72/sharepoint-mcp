@@ -555,13 +555,18 @@ async def test_search_site(mock_context):
             )
         ],
     )
-    result = await client.search_site("site1", "report")
+    result = await client.search_site(
+        "https://contoso.sharepoint.com/sites/hr", "report"
+    )
     hits = result["value"][0]["hitsContainers"][0]["hits"]
     assert hits[0]["resource"]["name"] == "doc.docx"
-    assert "sites/site1/search" in str(calls[0].url)
+    assert str(calls[0].url).endswith("/search/query")
     sent_body = json.loads(calls[0].content)
-    assert sent_body["requests"][0]["query"]["queryString"] == "report"
+    assert sent_body["requests"][0]["query"]["queryString"] == (
+        '(report) AND path:"https://contoso.sharepoint.com/sites/hr"'
+    )
     assert sent_body["requests"][0]["size"] == 25
+    assert "region" not in sent_body["requests"][0]
     assert sent_body["requests"][0]["entityTypes"] == [
         "driveItem",
         "listItem",
@@ -569,18 +574,94 @@ async def test_search_site(mock_context):
     ]
 
 
-async def test_search_site_custom_size(mock_context):
-    """Test search_site passes a custom result size through."""
+async def test_search_site_custom_size_and_region(mock_context):
+    """Test search_site passes size and an explicit region through."""
     client, calls = make_client(mock_context, [httpx.Response(200, json={"value": []})])
-    await client.search_site("site1", "report", size=5)
+    await client.search_site(
+        "https://contoso.sharepoint.com/sites/hr", "report", size=5, region="EMEA"
+    )
     sent_body = json.loads(calls[0].content)
     assert sent_body["requests"][0]["size"] == 5
+    assert sent_body["requests"][0]["region"] == "EMEA"
+
+
+async def test_search_site_detects_region_and_retries(mock_context, monkeypatch):
+    """Test that the region is parsed from the Graph error and retried once."""
+    monkeypatch.setattr("utils._graph_site_ops._detected_region", None)
+    client, calls = make_client(
+        mock_context,
+        [
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "code": "BadRequest",
+                        "message": "Requested region  not found. "
+                        "Only valid regions are QAT.",
+                    }
+                },
+            ),
+            httpx.Response(200, json={"value": []}),
+        ],
+    )
+    result = await client.search_site(
+        "https://contoso.sharepoint.com/sites/hr", "report"
+    )
+    assert result["value"] == []
+    assert len(calls) == 2
+    first_body = json.loads(calls[0].content)
+    assert "region" not in first_body["requests"][0]
+    retry_body = json.loads(calls[1].content)
+    assert retry_body["requests"][0]["region"] == "QAT"
+
+    # The detected region is cached and used on subsequent calls
+    client, calls = make_client(mock_context, [httpx.Response(200, json={"value": []})])
+    await client.search_site("https://contoso.sharepoint.com/sites/hr", "next")
+    assert json.loads(calls[0].content)["requests"][0]["region"] == "QAT"
+
+
+async def test_search_site_region_required_probe(mock_context, monkeypatch):
+    """Test region discovery when Graph only says 'Region is required'."""
+    monkeypatch.setattr("utils._graph_site_ops._detected_region", None)
+    required = httpx.Response(
+        400,
+        json={
+            "error": {
+                "code": "BadRequest",
+                "message": "SearchRequest Invalid (Region is required when "
+                "request with application permission.)",
+            }
+        },
+    )
+    wrong_region = httpx.Response(
+        400,
+        json={
+            "error": {
+                "code": "BadRequest",
+                "message": "Requested region  not found. "
+                "Only valid regions are QAT.",
+            }
+        },
+    )
+    client, calls = make_client(
+        mock_context, [required, wrong_region, httpx.Response(200, json={"value": []})]
+    )
+    result = await client.search_site(
+        "https://contoso.sharepoint.com/sites/hr", "report"
+    )
+    assert result["value"] == []
+    assert len(calls) == 3
+    assert "region" not in json.loads(calls[0].content)["requests"][0]
+    assert json.loads(calls[1].content)["requests"][0]["region"] == "NAM"
+    assert json.loads(calls[2].content)["requests"][0]["region"] == "QAT"
 
 
 async def test_search_site_empty_value(mock_context):
     """Test search_site tolerates an empty value array (no results)."""
     client, _ = make_client(mock_context, [httpx.Response(200, json={"value": []})])
-    result = await client.search_site("site1", "nothing")
+    result = await client.search_site(
+        "https://contoso.sharepoint.com/sites/hr", "nothing"
+    )
     assert result["value"] == []
 
 

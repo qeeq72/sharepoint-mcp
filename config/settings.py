@@ -21,6 +21,9 @@ SHAREPOINT_CONFIG = {
     "search_sites": [
         s.strip() for s in os.getenv("SEARCH_SITES", "").split(",") if s.strip()
     ],
+    # Tenant search region for /search/query with app-only tokens (e.g. NAM,
+    # EMEA). Optional: auto-detected from the Graph error response when empty.
+    "search_region": os.getenv("SEARCH_REGION", ""),
     "scope": [
         "https://graph.microsoft.com/.default",
         # The application must have these permissions:
