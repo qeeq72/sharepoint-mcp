@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from auth.sharepoint_auth import SharePointContext, get_auth_context
 from config.settings import APP_NAME, DEBUG
@@ -57,8 +58,34 @@ async def sharepoint_lifespan(server: FastMCP) -> AsyncIterator[SharePointContex
         logger.info("Ending SharePoint connection...")
 
 
+def build_transport_security() -> TransportSecuritySettings | None:
+    """Build DNS-rebinding protection settings from environment variables.
+
+    MCP_ALLOWED_HOSTS / MCP_ALLOWED_ORIGINS: comma-separated values that
+    clients are allowed to send in the Host / Origin headers (include the
+    port, e.g. "mcp.example.com:8001"). "*" disables the protection
+    entirely. Unset keeps the SDK default (localhost-only), which returns
+    421 Invalid Host header to any other hostname.
+    """
+    hosts = [
+        h.strip() for h in os.getenv("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()
+    ]
+    origins = [
+        o.strip() for o in os.getenv("MCP_ALLOWED_ORIGINS", "").split(",") if o.strip()
+    ]
+    if not hosts and not origins:
+        return None
+    if "*" in hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    return TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=origins)
+
+
 # Create MCP server at module level so CLI can find it
-mcp = FastMCP(APP_NAME, lifespan=sharepoint_lifespan)
+mcp = FastMCP(
+    APP_NAME,
+    lifespan=sharepoint_lifespan,
+    transport_security=build_transport_security(),
+)
 
 # Register tools
 register_site_tools(mcp)
