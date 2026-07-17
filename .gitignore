@@ -57,3 +57,6 @@ coverage.xml
 
 # Claude
 .claude/
+
+# Claude Code project MCP config (contains credentials)
+.mcp.json
